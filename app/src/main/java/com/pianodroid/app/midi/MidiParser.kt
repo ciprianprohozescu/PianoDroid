@@ -123,7 +123,7 @@ class MidiParser {
                     pos += 3
 
                     if (velocity > 0) {
-                        activeNotes[pitch] = Pair(currentTick, currentMs)
+                        activeNotes[pitch] = Pair(currentTick, currentMs.toLong())
                     } else {
                         // Velocity 0 = Note Off
                         activeNotes.remove(pitch)?.let { (startTick, startMs) ->
@@ -157,9 +157,9 @@ class MidiParser {
 
                     when (metaType) {
                         0x03 -> {  // Track name
-                            val nameBytes = data.copyOfRange(pos, pos + length.first)
+                            val nameBytes = data.copyOfRange(pos, (pos + length.first).toInt())
                             trackName = String(nameBytes)
-                            pos += length.first
+                            pos += length.first.toInt()
                         }
                         0x51 -> {  // Tempo
                             if (length.first >= 3) {
@@ -167,13 +167,13 @@ class MidiParser {
                                         ((data[pos + 1].toInt() and 0xFF) shl 8) or
                                         (data[pos + 2].toInt() and 0xFF)
                                 tempoMap.add(TempoEvent(currentTick, tempo))
-                                pos += length.first
+                                pos += length.first.toInt()
                             } else {
-                                pos += length.first
+                                pos += length.first.toInt()
                             }
                         }
                         else -> {
-                            pos += length.first
+                            pos += length.first.toInt()
                         }
                     }
                 }
@@ -185,13 +185,17 @@ class MidiParser {
         }
 
         // Close any remaining active notes
-        activeNotes.forEach { (pitch, (startTick, startMs)) ->
-            notes.add(Note(
-                pitch = pitch,
-                startMs = startMs.toLong(),
-                endMs = currentMs.toLong(),
-                velocity = 64
-            ))
+        activeNotes.forEach { (pitch, times) ->
+            val (_, startMs) = times
+
+            notes.add(
+                Note(
+                    pitch = pitch,
+                    startMs = startMs,
+                    endMs = currentMs.toLong(),
+                    velocity = 64
+                )
+            )
         }
 
         notes.sortBy { it.startMs }

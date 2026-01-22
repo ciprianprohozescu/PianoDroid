@@ -4,6 +4,7 @@ import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
+import android.media.midi.MidiOutputPort
 import android.media.midi.MidiReceiver
 import android.os.Build
 import android.os.Handler
@@ -17,7 +18,7 @@ import java.io.IOException
 @RequiresApi(Build.VERSION_CODES.M)
 class MidiInputHandler(private val midiManager: MidiManager) {
     private var currentDevice: MidiDevice? = null
-    private var inputPort: MidiInputPort? = null
+    private var outputPort: MidiOutputPort? = null
     private var onNoteOn: ((pitch: Int, velocity: Int) -> Unit)? = null
     private var onNoteOff: ((pitch: Int) -> Unit)? = null
 
@@ -39,14 +40,14 @@ class MidiInputHandler(private val midiManager: MidiManager) {
         midiManager.openDevice(deviceInfo, { device ->
             if (device == null) return@openDevice
 
-            val inputPortCount = device.inputPortCount
-            if (inputPortCount > 0) {
+            val outputPortCount = device.info.outputPortCount
+            if (outputPortCount > 0) {
                 try {
-                    val port = device.openInputPort(0)
+                    val port = device.openOutputPort(0)
                     if (port != null) {
                         port.connect(MidiReceiverImpl())
                         currentDevice = device
-                        inputPort = port
+                        outputPort = port
                     }
                 } catch (e: IOException) {
                     e.printStackTrace()
@@ -64,8 +65,8 @@ class MidiInputHandler(private val midiManager: MidiManager) {
 
     fun closeDevice() {
         try {
-            inputPort?.close()
-            inputPort = null
+            outputPort?.close()
+            outputPort = null
             currentDevice?.close()
             currentDevice = null
         } catch (e: Exception) {

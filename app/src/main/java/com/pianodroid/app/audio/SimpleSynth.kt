@@ -5,6 +5,7 @@ import android.media.AudioTrack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.pow
 
 /**
  * Simple polyphonic synthesizer using triangle wave with ADSR envelope.
@@ -102,7 +103,7 @@ class SimpleSynth {
         private val velocity: Float,
         private val sampleRate: Int
     ) {
-        private val frequency = 440.0 * kotlin.math.pow(2.0, (pitch - 69) / 12.0)
+        private val frequency = 440.0 * 2.0.pow((pitch - 69) / 12.0)
         private var phase = 0.0
         private val phaseIncrement = frequency / sampleRate * 2.0 * kotlin.math.PI
 
