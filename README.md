@@ -1,97 +1,247 @@
-# PianoDroid - Project Summary
+## PianoDroid – Android Native Project Summary
 
-## Purpose
-PianoVibe (labeled "Piano Learner" in the UI) is a web app to practice piano with interactive MIDI playback, live grading, and a readable piano‑roll. Upload a MIDI file, connect a MIDI keyboard, choose a mode, and practice with visual guidance.
+### Purpose
+PianoDroid (labeled **“Piano Learner”** in the UI) is an **Android app** to practice piano with interactive MIDI playback, live grading, and a readable piano‑roll.  
+You load a MIDI file, connect a MIDI keyboard *or* use the microphone, choose a mode, and practice with visual guidance.
 
-## Functionality
+### Functionality
 
-### Core Features
-1. **MIDI File Upload**: Load standard MIDI files (`.mid`/`.midi`) for practice and playback.
-2. **MIDI/Microphone Input**:
-   - **MIDI Device Integration**: Detects and connects to MIDI input devices via the Web MIDI API. Hot‑plugging is handled and the first device is auto‑selected when available.
-   - **Microphone Mode**: Uses your device microphone (via Web Audio + getUserMedia) to detect pitch and convert it into note on/off events so you can practice without a MIDI keyboard.
-3. **Modes**:
-   - **Learn Mode**: Auto‑pauses at each upcoming note/chord and waits until you play the correct notes, then auto‑resumes to the next group.
-   - **Play Mode**: Free‑running playback, unaffected by user input.
-4. **Live Grading**: Incoming key presses are matched to scheduled notes within a small timing window and marked per note as `hit` (green) or `miss` (red).
-5. **Piano Roll Visualization**: Notes “fall” toward a keyboard lane. Current/graded notes are colorized; pressed keys light up on the keyboard.
-6. **Playback Controls**: Play/Pause, Seek‑to‑Start, and Tempo slider (50%–150%).
+#### Core Features
+1. **MIDI File Load**  
+   - Load standard MIDI files (`.mid` / `.midi`) from local storage via the system file picker.
 
-### User Experience
-- Modern dark theme UI.
-- Clear visual grid (time lines, octave lines) and a bottom keyboard lane with pressed‑key highlighting.
-- Helpful notices for MIDI support/permission.
+2. **MIDI / Microphone Input**
+   - **MIDI Device Integration** (Android MIDI API)  
+     - Detects and connects to connected MIDI devices.  
+     - First available device can be auto‑selected.
+   - **Microphone Mode**  
+     - Uses the device microphone (`AudioRecord`) and a basic pitch detector (autocorrelation) to convert audio into note on/off events so you can practice without a MIDI keyboard.
+
+3. **Modes**
+   - **Learn Mode**  
+     - Auto‑pauses at each upcoming note/chord.  
+     - Waits until you play the correct notes, then auto‑resumes to the next group.
+   - **Play Mode**  
+     - Free‑running playback, unaffected by user input; you just play along.
+
+4. **Live Grading**
+   - Incoming key presses (from MIDI or microphone) are matched to scheduled notes within a small timing window.  
+   - Each note is marked as:
+     - `hit` (green) or  
+     - `miss` (red).
+
+5. **Piano Roll Visualization**
+   - Notes “fall” toward a bottom keyboard lane.  
+   - Current/graded notes are colorized; pressed keys light up on the keyboard.
+
+6. **Playback Controls**
+   - Play / Pause  
+   - Seek‑to‑Start  
+   - Tempo slider (50%–150%).
+
+#### User Experience
+- **Modern dark theme** UI built with Jetpack Compose + Material 3.
+- **Clear visual grid** (time lines, octave lines) and a bottom keyboard lane with pressed‑key highlighting.
+- Helpful **status messaging** around permissions (microphone) and MIDI devices.
+
+---
 
 ## Architecture
 
-### Component Structure
-1. **App** (`src/App.tsx`): Orchestrates transport, audio, scheduling, grading, learn gating, device binding, and the UI.
-2. **Transport** (`src/transport.ts`): Stable timing based on `AudioContext`. Supports play/pause, seek, and a tempo multiplier.
-3. **Audio**:
-   - **SimpleSynth** (`src/audio/SimpleSynth.ts`): Minimal poly synth using Web Audio API oscillators + ADSR envelopes.
-   - **SongScheduler** (`src/audio/SongScheduler.ts`): Look‑ahead scheduler that queues note on/off using `AudioContext` time.
-4. **MIDI Processing**:
-   - **parseMidi** (`src/midi/parseMidi.ts`): Minimal SMF parser (format 0/1). Handles tempo map, track names, Note On/Off, running status.
-5. **Learning/Feedback**:
-   - **Grader** (`src/grade/Grader.ts`): Matches played notes to scheduled notes and maintains a per‑note state map: `0=pending`, `1=hit`, `2=miss`.
-   - **LearnGate** (`src/learn/LearnGate.ts`): Groups near‑simultaneous notes into chords and auto‑pauses/resumes to gate progress in Learn mode.
-6. **Visualization**:
-   - **PianoRollCanvas** (`src/render/PianoRollCanvas.tsx`): Canvas renderer for the piano roll, graded note coloring, and keyboard lane.
+### High‑Level Modules
 
-### Data Flow
-1. User selects a MIDI file.
-2. File is parsed into a structured `Song` object with per‑note `startMs`/`endMs` using the tempo map.
-3. On Play:
-   - `Transport` exposes song time in ms and tempo multiplier.
-   - `SongScheduler` schedules note on/off events ahead of time.
-   - `SimpleSynth` renders audio for scheduled notes.
-   - `Grader` continuously evaluates user key presses against note start times and updates the note state map.
-   - `LearnGate` (in Learn mode) auto‑pauses at the next note/chord until satisfied, then resumes.
-   - `PianoRollCanvas` draws the windowed piano roll with graded colors and pressed‑key highlights.
+1. **UI Layer (Jetpack Compose)**
+   - `MainActivity`  
+     - Sets up the Compose UI and injects `PianoLearnerViewModel`.
+   - `MainScreen`  
+     - Main screen with:
+       - MIDI file picker  
+       - Mode selection (Learn / Play)  
+       - Input mode selection (MIDI / Microphone)  
+       - Piano‑roll canvas  
+       - Playback controls and tempo slider  
+       - Status messages.
+   - `PianoRollCanvas`  
+     - Composable `Canvas` that draws:
+       - Time grid (vertical axis is time, scrolling downward into the future).  
+       - Pitch axis (horizontal).  
+       - Colored note rectangles (pending / hit / miss).  
+       - Bottom keyboard lane with pressed‑key highlights.
+
+2. **ViewModel / Orchestration**
+   - `PianoLearnerViewModel`
+     - Owns the main `PianoLearnerUiState` (song, notes, timing, pressed keys, modes, tempo, status).  
+     - Wires together:
+       - `Transport` (timing)  
+       - `SimpleSynth` (audio)  
+       - `SongScheduler` (note scheduling)  
+       - `MidiParser` (parses MIDI into `Song`)  
+       - `Grader` (hit/miss grading)  
+       - `LearnGate` (Learn‑mode gating)  
+       - `MidiInputHandler` (MIDI keyboard input)  
+       - `PitchDetector` (microphone input).
+
+3. **Timing**
+   - `Transport`
+     - Uses `Handler` + `System.currentTimeMillis()` to maintain a **song time in ms**.  
+     - Exposes:
+       - `currentTimeMs: StateFlow<Long>`  
+       - `isPlaying` state  
+       - `tempoMultiplier` (internally clamped to 0.25×–2×, UI uses 0.5×–1.5×).
+     - Supports:
+       - `play()` / `pause()`  
+       - `seekToStart()`  
+       - `setTempoMultiplier(multiplier: Double)`.
+
+4. **Audio**
+   - `SimpleSynth`
+     - Minimal poly synth using **triangle waves** and a simple **ADSR** envelope per voice.  
+     - Uses Android `AudioTrack` for low‑latency streaming audio.  
+     - Manages:
+       - `noteOn(pitch, velocity)`  
+       - `noteOff(pitch)`  
+       - Internal `Voice` objects with ADSR.
+   - `SongScheduler`
+     - Look‑ahead scheduler that:
+       - Reads `currentTimeMs` and `tempoMultiplier` from `Transport`.  
+       - Schedules note on/off events in a ~120ms window ahead of time.  
+       - Calls `SimpleSynth.noteOn` / `noteOff` for all notes across all tracks in the current song.
+
+5. **MIDI Processing**
+   - `MidiParser`
+     - Minimal **Standard MIDI File (SMF)** parser (format 0/1).  
+     - Handles:
+       - Header (`MThd`) and track (`MTrk`) chunks  
+       - Variable‑length delta times  
+       - Tempo meta events (`0xFF 0x51`)  
+       - Track name meta events (`0xFF 0x03`)  
+       - Channel messages for Note On/Off  
+       - Running status  
+       - Basic tempo map → per‑note `startMs` / `endMs`.
+   - Data models:
+     - `Song` (format, ticksPerQuarter, list of `Track`, tempo map)  
+     - `Track` (name, list of `Note`)  
+     - `Note` (pitch, `startMs`, `endMs`, velocity, `NoteState`)  
+     - `TempoEvent` (tick, tempo).
+
+6. **Learning / Feedback**
+   - `Grader`
+     - Maintains a per‑note `NoteState` map:
+       - `Pending` (0)  
+       - `Hit` (1)  
+       - `Miss` (2).
+     - Core logic:
+       - `onNotePlayed(pitch, currentTimeMs)` – marks the closest matching note within a small timing window (~150ms) as **Hit**.  
+       - `evaluateMisses(currentTimeMs)` – marks overdue notes as **Miss**.
+   - `LearnGate`
+     - Groups near‑simultaneous notes into **chords** based on a small ms threshold.  
+     - For Learn mode, it:
+       - Tracks which chord group is “current”.  
+       - Requests a pause as playback approaches the group.  
+       - Waits until all notes in the current group are **Hit**; then advances to the next group and allows playback to resume.
+
+7. **Input Integration**
+   - `MidiInputHandler` (Android MIDI API)
+     - Enumerates available MIDI devices via `MidiManager`.  
+     - Opens a device and listens for **Note On / Note Off** events.  
+     - Emits callbacks wired into the `ViewModel` for grading and keyboard visualization.
+   - `PitchDetector` (Microphone)
+     - Uses `AudioRecord` to capture mono audio.  
+     - Runs a simple autocorrelation‑based pitch detector on a background coroutine.  
+     - Converts frequency → MIDI note and calls `onNoteOn` / `onNoteOff` callbacks.
+
+---
+
+## Data Flow (End‑to‑End)
+
+1. **User selects a MIDI file** using the system file picker (MIME `audio/midi`).
+2. `PianoLearnerViewModel.loadMidiFile`:
+   - Parses the file with `MidiParser` → `Song` object with tracks and per‑note timing.
+   - Flattens all notes for visualization.
+   - Resets `Transport`, `Grader`, and `LearnGate`.  
+   - Creates / restarts `SongScheduler` wired to the current `Song`.
+3. **On Play**:
+   - `Transport.play()` starts emitting `currentTimeMs`.  
+   - `SongScheduler` schedules note on/off events into `SimpleSynth`.  
+   - `Grader.evaluateMisses` runs continuously as time advances.  
+   - In Learn mode, `LearnGate` may request a pause around each chord group until notes are played correctly.
+4. **User Input (MIDI or Microphone)**:
+   - Incoming note events call into the ViewModel → `onNotePlayed` / `onNoteReleased`.  
+   - `Grader.onNotePlayed` updates note states (Hit / Miss) and pushes updates to the UI.  
+   - Pressed keys are reflected in the keyboard lane; colored notes update in the piano roll.
+
+---
 
 ## Tech Stack
 
 ### Core Technologies
-- **Framework**: React 19 (`react@^19.1.1`)
-- **Language**: TypeScript (~5.9)
-- **Build Tool**: Vite 7
+- **Platform**: Android (minSdk ~26 for MIDI API, targetSdk 34)
+- **Language**: Kotlin
+- **UI**: Jetpack Compose + Material 3
+- **Architecture**: MVVM with `AndroidViewModel` + Kotlin coroutines + `StateFlow`
 
-### Web APIs
-- **Web Audio API**: Audio synthesis and precise timing.
-- **Web MIDI API**: MIDI input integration.
-- **Canvas 2D API**: Piano roll rendering.
+### Audio & MIDI
+- **Audio Output**: `AudioTrack` (stream mode) for real‑time synthesis.
+- **Microphone Input**: `AudioRecord` (mono, 44.1 kHz) with basic pitch detection.
+- **MIDI Input**: Android MIDI API (`MidiManager`, `MidiDevice`, `MidiOutputPort`, `MidiReceiver`).
 
-### Development Tools
-- ESLint 9
-- TypeScript ESLint
+### Libraries / Dependencies
+- `androidx.core:core-ktx`
+- `androidx.activity:activity-compose`
+- `androidx.lifecycle:lifecycle-runtime-ktx`
+- `androidx.compose:*` (BOM, UI, Material3, tooling)
+- `org.jetbrains.kotlinx:kotlinx-coroutines-android`
+- Standard Android test libraries (`junit`, `androidx.test`, etc.).
 
-## Implementation Details
+---
 
-### Audio & Timing
-- Triangle‑wave poly synth with simple ADSR; master gain control in `SimpleSynth`.
-- Look‑ahead scheduling window (~120ms) with ~25ms ticks for responsive tempo/seek changes.
-- `Transport` tempo multiplier range is clamped internally (0.25×–2×). UI exposes 50%–150%.
+## Running the App
 
-### MIDI Parsing
-- Minimal SMF support: header, multiple tracks, meta tempo (`0xFF 0x51`), track name (`0xFF 0x03`), Note On/Off, running status.
-- Converts ticks to milliseconds using a tempo map; default tempo 120 BPM until a tempo event is encountered.
-- SMPTE timebase is not supported.
+### Prerequisites
+- Android Studio (Giraffe or newer recommended).
+- Android SDK with:
+  - Compile SDK 34  
+  - Min SDK 26+
 
-### Visualization
-- Time = vertical (future downward). Pitch = horizontal.
-- Visible window defaults to ~6s of future time and resizes with the container.
-- Note coloring: pending (indigo), hit (green), miss (red). Keyboard lane highlights pressed keys.
+### Steps
+1. **Open the project**
+   - In Android Studio: **File → Open…** and select the `PianoDroid` directory.
+2. **Sync Gradle**
+   - Android Studio should auto‑sync; if not, click **Sync Project with Gradle Files**.
+3. **Run on a device / emulator**
+   - Prefer a **real device** with:
+     - USB‑MIDI support (for MIDI keyboards), and/or  
+     - A microphone (for mic mode).  
+   - Select a run configuration and click **Run**.
 
-## How to Use
-1. Open the app (Vite dev server or deployed build).
-2. Choose a `.mid`/`.midi` file.
-3. Select your MIDI input device (first device is auto‑selected when available).
-4. Pick a mode: Learn or Play.
-5. Press Play. Use ⏮︎ to seek to start and adjust Tempo as needed.
+---
+
+## How to Use the App
+
+1. Launch **Piano Learner** on your Android device.
+2. Tap **“Select MIDI File”** and choose a `.mid`/`.midi` file from local storage.
+3. Select **Mode**:
+   - **Learn Mode** for stepwise, auto‑paused practice.  
+   - **Play Mode** for continuous playback.
+4. Select **Input Mode**:
+   - **MIDI** if you have a MIDI keyboard attached.  
+   - **Microphone** if you want to practice acoustically (device listens and infers pitches).
+5. Press **Play**:
+   - Use the **⏮ (seek‑to‑start)** button to return to the beginning.  
+   - Adjust **Tempo** with the slider (50%–150%).
 
 Notes:
-- Web MIDI is supported in Chromium‑based desktops. If unsupported or permission is denied, the app shows a notice.
-- Connect your keyboard before loading the page, or refresh after connecting.
+- MIDI device availability depends on your Android device and connection method (USB‑OTG, etc.).  
+- Microphone mode requires the `RECORD_AUDIO` permission; the app will prompt for it when needed.
+
+---
 
 ## Current Status
-Prototype: functional and suitable for practicing simple pieces. The synth is intentionally simple (not a realistic piano). Feature areas to expand later include sustain pedal/CC handling, richer sound, velocity curves, score/part selection, and more advanced learning flows.
+
+Prototype‑level Android app: functional and suitable for practicing simple pieces.  
+The synth is intentionally simple (not a realistic piano). Potential future improvements:
+- Sustain pedal / CC handling (MIDI control changes).
+- Richer sound engine and instrument selection.
+- Velocity curves and per‑instrument settings.
+- Multiple track/part selection.
+- More advanced learning flows and progress tracking.
