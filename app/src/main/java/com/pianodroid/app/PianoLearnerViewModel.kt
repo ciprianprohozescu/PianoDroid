@@ -59,9 +59,6 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
     private fun initializeComponents() {
         transport = Transport()
         synth = SimpleSynth()
-        
-        // Start audio rendering
-        synth?.startRendering(viewModelScope)
 
         // Observe transport time
         viewModelScope.launch {
