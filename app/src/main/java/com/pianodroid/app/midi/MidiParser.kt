@@ -86,108 +86,16 @@ class MidiParser {
     ): Track {
         var pos = 0
         var trackName = ""
-        var currentTempo = DEFAULT_TEMPO
+        var currentTempo = DEFAULT_TEMPO           // microseconds per quarter note
         var currentTick = 0L
         var currentMs = 0.0
+
         val notes = mutableListOf<Note>()
-        val activeNotes = mutableMapOf<Int, Pair<Long, Long>>()  // pitch -> (startTick, startMs)
+        val activeNotes = mutableMapOf<Int, Long>() // pitch -> startMs
         var runningStatus: Int? = null
 
-        while (pos < data.size) {
-            val deltaTick = readVarLen(data, pos)
-            pos = deltaTick.second
-            val tickDelta = deltaTick.first
-
-            currentTick += tickDelta
-            val tickDeltaMs = (tickDelta * currentTempo) / (ticksPerQuarter * 1000.0)
-            currentMs += tickDeltaMs
-
-            // Update tempo if needed
-            val tempoAtTick = getTempoAtTick(tempoMap, currentTick, ticksPerQuarter)
-            if (tempoAtTick != currentTempo) {
-                currentTempo = tempoAtTick
-            }
-
-            val status = if (data[pos].toInt() and 0x80 != 0) {
-                runningStatus = data[pos].toInt()
-                runningStatus!!
-            } else {
-                runningStatus ?: return Track(trackName, emptyList())
-            }
-
-            when (status and 0xF0) {
-                0x90 -> {  // Note On
-                    if (pos + 2 >= data.size) break
-                    val pitch = data[pos + 1].toInt() and 0xFF
-                    val velocity = data[pos + 2].toInt() and 0xFF
-                    pos += 3
-
-                    if (velocity > 0) {
-                        activeNotes[pitch] = Pair(currentTick, currentMs.toLong())
-                    } else {
-                        // Velocity 0 = Note Off
-                        activeNotes.remove(pitch)?.let { (startTick, startMs) ->
-                            notes.add(Note(
-                                pitch = pitch,
-                                startMs = startMs.toLong(),
-                                endMs = currentMs.toLong(),
-                                velocity = 64
-                            ))
-                        }
-                    }
-                }
-                0x80 -> {  // Note Off
-                    if (pos + 2 >= data.size) break
-                    val pitch = data[pos + 1].toInt() and 0xFF
-                    pos += 2
-
-                    activeNotes.remove(pitch)?.let { (startTick, startMs) ->
-                        notes.add(Note(
-                            pitch = pitch,
-                            startMs = startMs.toLong(),
-                            endMs = currentMs.toLong(),
-                            velocity = 64
-                        ))
-                    }
-                }
-                0xFF -> {  // Meta event
-                    val metaType = data[pos + 1].toInt() and 0xFF
-                    val length = readVarLen(data, pos + 2)
-                    pos = length.second
-
-                    when (metaType) {
-                        0x03 -> {  // Track name
-                            val nameBytes = data.copyOfRange(pos, (pos + length.first).toInt())
-                            trackName = String(nameBytes)
-                            pos += length.first.toInt()
-                        }
-                        0x51 -> {  // Tempo
-                            if (length.first >= 3) {
-                                val tempo = ((data[pos].toInt() and 0xFF) shl 16) or
-                                        ((data[pos + 1].toInt() and 0xFF) shl 8) or
-                                        (data[pos + 2].toInt() and 0xFF)
-                                tempoMap.add(TempoEvent(currentTick, tempo))
-                                pos += length.first.toInt()
-                            } else {
-                                pos += length.first.toInt()
-                            }
-                        }
-                        else -> {
-                            pos += length.first.toInt()
-                        }
-                    }
-                }
-                else -> {
-                    // Skip unknown event
-                    pos++
-                }
-            }
-        }
-
-        // Close any remaining active notes
-        activeNotes.forEach { (pitch, times) ->
-            val (_, startMs) = times
-
+        fun addNoteOff(pitch: Int) {
+            val startMs = activeNotes.remove(pitch) ?: return
             notes.add(
                 Note(
                     pitch = pitch,
@@ -196,6 +104,124 @@ class MidiParser {
                     velocity = 64
                 )
             )
+        }
+
+        while (pos < data.size) {
+            // 1) Delta-time (VLQ)
+            val (tickDelta, afterDeltaPos) = readVarLen(data, pos)
+            pos = afterDeltaPos
+            currentTick += tickDelta
+
+            // Convert delta ticks -> ms using the tempo that applied BEFORE this event
+            val tickDeltaMs = (tickDelta * currentTempo) / (ticksPerQuarter * 1000.0)
+            currentMs += tickDeltaMs
+
+            if (pos >= data.size) break
+
+            // 2) Status byte or running status
+            val first = data[pos].toInt() and 0xFF
+            val hasStatusByte = (first and 0x80) != 0
+
+            val status: Int = if (hasStatusByte) {
+                pos += 1
+                runningStatus = first
+                first
+            } else {
+                runningStatus ?: break
+            }
+
+            // 3) META events (0xFF)  -> running status canceled
+            if (status == 0xFF) {
+                runningStatus = null
+                if (pos >= data.size) break
+
+                val metaType = data[pos].toInt() and 0xFF
+                val (len, afterLenPos) = readVarLen(data, pos + 1)
+                pos = afterLenPos
+
+                if (pos + len > data.size) break
+
+                when (metaType) {
+                    0x03 -> { // Track name
+                        val nameBytes = data.copyOfRange(pos, pos + len.toInt())
+                        trackName = String(nameBytes)
+                    }
+                    0x51 -> { // Tempo (3 bytes, microseconds per quarter note)
+                        if (len >= 3) {
+                            val tempo =
+                                ((data[pos].toInt() and 0xFF) shl 16) or
+                                        ((data[pos + 1].toInt() and 0xFF) shl 8) or
+                                        (data[pos + 2].toInt() and 0xFF)
+
+                            if (isFirstTrack) tempoMap.add(TempoEvent(currentTick, tempo))
+                            currentTempo = tempo
+                        }
+                    }
+                }
+
+                pos += len.toInt()
+                continue
+            }
+
+            // 4) SysEx events (0xF0 / 0xF7) -> running status canceled
+            if (status == 0xF0 || status == 0xF7) {
+                runningStatus = null
+                val (len, afterLenPos) = readVarLen(data, pos)
+                pos = afterLenPos + len.toInt()
+                continue
+            }
+
+            // 5) Channel voice messages
+            val eventType = status and 0xF0
+
+            when (eventType) {
+                0x80 -> { // Note Off: note, velocity
+                    if (pos + 1 >= data.size) break
+                    val pitch = data[pos].toInt() and 0xFF
+                    // val velocity = data[pos + 1].toInt() and 0xFF
+                    pos += 2
+                    addNoteOff(pitch)
+                }
+
+                0x90 -> { // Note On: note, velocity (velocity 0 => Note Off)
+                    if (pos + 1 >= data.size) break
+                    val pitch = data[pos].toInt() and 0xFF
+                    val velocity = data[pos + 1].toInt() and 0xFF
+                    pos += 2
+
+                    if (velocity > 0) {
+                        activeNotes[pitch] = currentMs.toLong()
+                    } else {
+                        addNoteOff(pitch)
+                    }
+                }
+
+                0xA0, // Poly pressure: note, pressure
+                0xB0, // Control change: controller, value
+                0xE0  // Pitch bend: lsb, msb
+                    -> {
+                    if (pos + 1 >= data.size) break
+                    pos += 2
+                }
+
+                0xC0, // Program change: program
+                0xD0  // Channel pressure: pressure
+                    -> {
+                    if (pos >= data.size) break
+                    pos += 1
+                }
+
+                else -> {
+                    // Unknown/system message in track data: cannot safely advance
+                    break
+                }
+            }
+        }
+
+        // Close lingering notes
+        val endMs = currentMs.toLong()
+        activeNotes.forEach { (pitch, startMs) ->
+            notes.add(Note(pitch = pitch, startMs = startMs, endMs = endMs, velocity = 64))
         }
 
         notes.sortBy { it.startMs }
