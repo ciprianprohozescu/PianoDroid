@@ -6,17 +6,25 @@ import com.pianodroid.app.data.Song
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+enum class LearnGateStatus {
+    Waiting,
+    PauseRequested,
+    ResumeRequested,
+    Finished
+}
+
 /**
- * Groups near-simultaneous notes into chords and auto-pauses/resumes
- * to gate progress in Learn mode.
+ * Groups near-simultaneous notes into chords and emits explicit playback actions.
  */
 class LearnGate(private val song: Song) {
-    private val chordToleranceMs = 50L  // Notes within 50ms are considered a chord
+    private val chordToleranceMs = 50L
+    private val preRollPauseMs = 100L
     private var currentGroupIndex = 0
     private var noteGroups: List<List<Note>> = emptyList()
+    private var waitingForCurrentGroup = false
 
-    private val _isPaused = MutableStateFlow(false)
-    val isPaused: StateFlow<Boolean> = _isPaused
+    private val _status = MutableStateFlow(LearnGateStatus.Waiting)
+    val status: StateFlow<LearnGateStatus> = _status
 
     private val _currentGroup = MutableStateFlow<List<Note>>(emptyList())
     val currentGroup: StateFlow<List<Note>> = _currentGroup
@@ -27,79 +35,74 @@ class LearnGate(private val song: Song) {
 
     private fun buildNoteGroups() {
         val allNotes = song.tracks.flatMap { it.notes }.sortedBy { it.startMs }
-        val groups = mutableListOf<List<Note>>()
-
         if (allNotes.isEmpty()) {
             noteGroups = emptyList()
+            _status.value = LearnGateStatus.Finished
             return
         }
 
+        val groups = mutableListOf<List<Note>>()
         var currentGroup = mutableListOf<Note>()
-        var groupStartTime = allNotes[0].startMs
+        var groupStartTime = allNotes.first().startMs
 
         allNotes.forEach { note ->
             if (note.startMs - groupStartTime <= chordToleranceMs) {
-                // Add to current group
                 currentGroup.add(note)
             } else {
-                // Start new group
-                if (currentGroup.isNotEmpty()) {
-                    groups.add(currentGroup.toList())
-                }
+                groups.add(currentGroup.toList())
                 currentGroup = mutableListOf(note)
                 groupStartTime = note.startMs
             }
         }
 
-        if (currentGroup.isNotEmpty()) {
-            groups.add(currentGroup)
-        }
-
+        groups.add(currentGroup.toList())
         noteGroups = groups
         updateCurrentGroup()
     }
 
-    fun onTimeUpdate(currentTimeMs: Long, noteStates: Map<Note, NoteState>) {
+    fun onTimeUpdate(currentTimeMs: Long, noteStates: Map<Long, NoteState>): LearnGateStatus {
         if (currentGroupIndex >= noteGroups.size) {
-            _isPaused.value = false
-            return
+            _status.value = LearnGateStatus.Finished
+            return LearnGateStatus.Finished
         }
 
         val currentGroup = noteGroups[currentGroupIndex]
-        val groupStartTime = currentGroup.first().startMs
-
-        // Check if we've reached the next group
-        if (currentTimeMs >= groupStartTime - 100) {  // 100ms before group starts
-            // Pause and wait for user to play the correct notes
-            _isPaused.value = true
-
-            // Check if all notes in current group are hit
-            val allHit = currentGroup.all { note ->
-                noteStates[note] == NoteState.Hit
+        val allHit = currentGroup.all { note -> noteStates[note.id] == NoteState.Hit }
+        if (allHit) {
+            currentGroupIndex++
+            waitingForCurrentGroup = false
+            updateCurrentGroup()
+            val status = if (currentGroupIndex >= noteGroups.size) {
+                LearnGateStatus.Finished
+            } else {
+                LearnGateStatus.ResumeRequested
             }
-
-            if (allHit) {
-                // Move to next group and resume
-                currentGroupIndex++
-                updateCurrentGroup()
-                _isPaused.value = false
-            }
-        } else {
-            _isPaused.value = false
+            _status.value = status
+            return status
         }
+
+        val groupStartTime = currentGroup.first().startMs
+        val status = if (currentTimeMs >= groupStartTime - preRollPauseMs) {
+            waitingForCurrentGroup = true
+            LearnGateStatus.PauseRequested
+        } else if (waitingForCurrentGroup) {
+            LearnGateStatus.PauseRequested
+        } else {
+            LearnGateStatus.Waiting
+        }
+
+        _status.value = status
+        return status
     }
 
     fun reset() {
         currentGroupIndex = 0
+        waitingForCurrentGroup = false
         updateCurrentGroup()
-        _isPaused.value = false
+        _status.value = if (noteGroups.isEmpty()) LearnGateStatus.Finished else LearnGateStatus.Waiting
     }
 
     private fun updateCurrentGroup() {
-        if (currentGroupIndex < noteGroups.size) {
-            _currentGroup.value = noteGroups[currentGroupIndex]
-        } else {
-            _currentGroup.value = emptyList()
-        }
+        _currentGroup.value = noteGroups.getOrNull(currentGroupIndex).orEmpty()
     }
 }

@@ -2,11 +2,8 @@ package com.pianodroid.app.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastRewind
@@ -39,7 +36,7 @@ fun MainScreen(viewModel: PianoLearnerViewModel) {
 
     // File picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             val inputStream = context.contentResolver.openInputStream(it)
@@ -55,6 +52,8 @@ fun MainScreen(viewModel: PianoLearnerViewModel) {
     ) { isGranted ->
         if (isGranted && uiState.inputMode == InputMode.Microphone) {
             viewModel.startMicrophoneInput()
+        } else if (!isGranted && uiState.inputMode == InputMode.Microphone) {
+            viewModel.onMicrophonePermissionDenied()
         }
     }
 
@@ -99,7 +98,11 @@ fun MainScreen(viewModel: PianoLearnerViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = { filePickerLauncher.launch("audio/midi") },
+                    onClick = {
+                        filePickerLauncher.launch(
+                            arrayOf("audio/midi", "audio/x-midi", "audio/mid", "application/octet-stream")
+                        )
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Select MIDI File")
@@ -167,6 +170,7 @@ fun MainScreen(viewModel: PianoLearnerViewModel) {
                 if (uiState.song != null) {
                     PianoRollCanvas(
                         notes = uiState.allNotes,
+                        noteStates = uiState.noteStates,
                         currentTimeMs = uiState.currentTimeMs,
                         pressedKeys = uiState.pressedKeys,
                         modifier = Modifier.fillMaxSize()

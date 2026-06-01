@@ -21,6 +21,25 @@ class MidiInputHandler(private val midiManager: MidiManager) {
     private var outputPort: MidiOutputPort? = null
     private var onNoteOn: ((pitch: Int, velocity: Int) -> Unit)? = null
     private var onNoteOff: ((pitch: Int) -> Unit)? = null
+    private var onDeviceChange: (() -> Unit)? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val deviceCallback = object : MidiManager.DeviceCallback() {
+        override fun onDeviceAdded(device: MidiDeviceInfo) {
+            onDeviceChange?.invoke()
+        }
+
+        override fun onDeviceRemoved(device: MidiDeviceInfo) {
+            if (currentDevice?.info?.id == device.id) {
+                closeDevice()
+                autoSelectFirstDevice()
+            }
+            onDeviceChange?.invoke()
+        }
+    }
+
+    init {
+        midiManager.registerDeviceCallback(deviceCallback, mainHandler)
+    }
 
     fun setNoteCallbacks(
         onNoteOn: (pitch: Int, velocity: Int) -> Unit,
@@ -32,6 +51,17 @@ class MidiInputHandler(private val midiManager: MidiManager) {
 
     fun getAvailableDevices(): List<MidiDeviceInfo> {
         return midiManager.devices.toList()
+    }
+
+    fun getAvailableDeviceNames(): List<String> {
+        return getAvailableDevices().map { device ->
+            val name = device.properties.getString(MidiDeviceInfo.PROPERTY_NAME)
+            name ?: "MIDI device ${device.id}"
+        }
+    }
+
+    fun setDeviceChangeCallback(callback: () -> Unit) {
+        onDeviceChange = callback
     }
 
     fun openDevice(deviceInfo: MidiDeviceInfo) {
@@ -104,6 +134,7 @@ class MidiInputHandler(private val midiManager: MidiManager) {
     }
 
     fun cleanup() {
+        midiManager.unregisterDeviceCallback(deviceCallback)
         closeDevice()
     }
 }

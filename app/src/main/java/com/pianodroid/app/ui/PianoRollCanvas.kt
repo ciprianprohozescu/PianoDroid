@@ -12,6 +12,10 @@ import com.pianodroid.app.data.Note
 import com.pianodroid.app.data.NoteState
 import kotlin.math.min
 
+private const val PIANO_LOW_MIDI = 21
+private const val PIANO_HIGH_MIDI = 108
+private const val PIANO_KEY_COUNT = 88
+
 /**
  * Piano roll visualization with notes falling toward a keyboard lane.
  * Time = vertical (future downward), Pitch = horizontal.
@@ -19,6 +23,7 @@ import kotlin.math.min
 @Composable
 fun PianoRollCanvas(
     notes: List<Note>,
+    noteStates: Map<Long, NoteState>,
     currentTimeMs: Long,
     pressedKeys: Set<Int>,
     modifier: Modifier = Modifier,
@@ -39,7 +44,7 @@ fun PianoRollCanvas(
         }
 
         visibleNotes.forEach { note ->
-            drawNote(note, currentTimeMs, visibleWindowMs, width, height)
+            drawNote(note, noteStates[note.id] ?: NoteState.Pending, currentTimeMs, visibleWindowMs, width, height)
         }
 
         // Draw keyboard lane at bottom
@@ -54,11 +59,11 @@ private fun DrawScope.drawGrid(
     visibleWindowMs: Long
 ) {
     // Draw octave lines (C notes)
-    val octaveWidth = width / 88f  // 88 keys total
-    val cKeys = listOf(0, 12, 24, 36, 48, 60, 72, 84)  // C notes (MIDI 12, 24, 36, etc.)
+    val keyWidth = width / PIANO_KEY_COUNT
+    val cKeys = listOf(24, 36, 48, 60, 72, 84, 96, 108)
 
-    cKeys.forEach { keyOffset ->
-        val x = keyOffset * octaveWidth
+    cKeys.forEach { midiPitch ->
+        val x = (midiPitch - PIANO_LOW_MIDI) * keyWidth
         drawLine(
             color = Color.Gray.copy(alpha = 0.3f),
             start = Offset(x, 0f),
@@ -92,6 +97,7 @@ private fun DrawScope.drawGrid(
 
 private fun DrawScope.drawNote(
     note: Note,
+    noteState: NoteState,
     currentTimeMs: Long,
     visibleWindowMs: Long,
     width: Float,
@@ -109,12 +115,13 @@ private fun DrawScope.drawNote(
     val noteHeight = yEnd - yStart
 
     // Calculate x position based on MIDI pitch
-    val pitch = note.pitch.coerceIn(0, 127)
-    val x = (pitch / 127f * width).coerceIn(0f, width)
-    val noteWidth = min(width / 127f * 2, 8f)  // 2 pixels per semitone, max 8px
+    val pitch = note.pitch.coerceIn(PIANO_LOW_MIDI, PIANO_HIGH_MIDI)
+    val keyWidth = width / PIANO_KEY_COUNT
+    val x = ((pitch - PIANO_LOW_MIDI) * keyWidth).coerceIn(0f, width)
+    val noteWidth = min(keyWidth, 10f)
 
     // Choose color based on note state
-    val color = when (note.state) {
+    val color = when (noteState) {
         NoteState.Pending -> Color(0xFF, 0x4A, 0x9F)  // Indigo
         NoteState.Hit -> Color(0x4C, 0xAF, 0x50)  // Green
         NoteState.Miss -> Color(0xF4, 0x43, 0x36)  // Red
@@ -130,7 +137,7 @@ private fun DrawScope.drawNote(
 private fun DrawScope.drawKeyboardLane(pressedKeys: Set<Int>, width: Float) {
     val laneHeight = size.height * 0.15f  // 15% of height
     val yStart = size.height - laneHeight
-    val keyWidth = width / 88f  // 88 keys
+    val keyWidth = width / PIANO_KEY_COUNT
 
     // Draw keyboard background
     drawRect(
@@ -140,14 +147,11 @@ private fun DrawScope.drawKeyboardLane(pressedKeys: Set<Int>, width: Float) {
     )
 
     // Draw white and black keys
-    val whiteKeys = listOf(0, 2, 4, 5, 7, 9, 11)  // C, D, E, F, G, A, B
-    for (octave in 0 until 8) {
-        whiteKeys.forEach { semitone ->
-            val pitch = octave * 12 + semitone
-            if (pitch > 127) return@forEach
-
+    val whiteSemitones = setOf(0, 2, 4, 5, 7, 9, 11)
+    for (pitch in PIANO_LOW_MIDI..PIANO_HIGH_MIDI) {
+        if (pitch % 12 in whiteSemitones) {
             val isPressed = pressedKeys.contains(pitch)
-            val x = (pitch / 127f * width).coerceIn(0f, width)
+            val x = ((pitch - PIANO_LOW_MIDI) * keyWidth).coerceIn(0f, width)
 
             drawRect(
                 color = if (isPressed) Color(0xFF, 0xE0, 0x81) else Color.White,
@@ -167,7 +171,8 @@ private fun DrawScope.drawKeyboardLane(pressedKeys: Set<Int>, width: Float) {
 
     // Draw pressed keys highlight
     pressedKeys.forEach { pitch ->
-        val x = (pitch / 127f * width).coerceIn(0f, width)
+        if (pitch !in PIANO_LOW_MIDI..PIANO_HIGH_MIDI) return@forEach
+        val x = ((pitch - PIANO_LOW_MIDI) * keyWidth).coerceIn(0f, width)
         drawLine(
             color = Color(0xFF, 0xD7, 0x00),
             start = Offset(x, yStart),

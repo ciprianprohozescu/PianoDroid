@@ -3,18 +3,16 @@ package com.pianodroid.app
 import android.app.Application
 import android.content.Context
 import android.media.midi.MidiManager
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pianodroid.app.audio.PitchDetector
-import com.pianodroid.app.audio.SimpleSynth
-import com.pianodroid.app.audio.SongScheduler
 import com.pianodroid.app.data.Note
+import com.pianodroid.app.data.NoteState
 import com.pianodroid.app.data.Song
+import com.pianodroid.app.grade.GradeDetail
 import com.pianodroid.app.grade.Grader
 import com.pianodroid.app.learn.LearnGate
+import com.pianodroid.app.learn.LearnGateStatus
 import com.pianodroid.app.midi.MidiInputHandler
 import com.pianodroid.app.midi.MidiParser
 import com.pianodroid.app.transport.Transport
@@ -35,6 +33,9 @@ data class PianoLearnerUiState(
     val inputMode: InputMode = InputMode.Midi,
     val tempoMultiplier: Double = 1.0,
     val pressedKeys: Set<Int> = emptySet(),
+    val noteStates: Map<Long, NoteState> = emptyMap(),
+    val noteFeedback: Map<Long, GradeDetail> = emptyMap(),
+    val midiDevices: List<String> = emptyList(),
     val statusMessage: String? = null
 )
 
@@ -43,8 +44,6 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
     val uiState: StateFlow<PianoLearnerUiState> = _uiState.asStateFlow()
 
     private var transport: Transport? = null
-    private var synth: SimpleSynth? = null
-    private var scheduler: SongScheduler? = null
     private var grader: Grader? = null
     private var learnGate: LearnGate? = null
     private var midiHandler: MidiInputHandler? = null
@@ -58,7 +57,6 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
 
     private fun initializeComponents() {
         transport = Transport()
-        synth = SimpleSynth()
 
         // Observe transport time
         viewModelScope.launch {
@@ -71,12 +69,7 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
                 // Update learn gate
                 if (_uiState.value.playMode == PlayMode.Learn) {
                     val noteStates = grader?.noteStatesFlow?.value ?: emptyMap()
-                    learnGate?.onTimeUpdate(time, noteStates)
-                    
-                    // Pause if learn gate says so
-                    if (learnGate?.isPaused?.value == true && _uiState.value.isPlaying) {
-                        pause()
-                    }
+                    handleLearnGateStatus(learnGate?.onTimeUpdate(time, noteStates))
                 }
             }
         }
@@ -90,6 +83,8 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
                     onNoteOn = { pitch, velocity -> onNotePlayed(pitch) },
                     onNoteOff = { pitch -> onNoteReleased(pitch) }
                 )
+                midiHandler?.setDeviceChangeCallback { refreshMidiDevices() }
+                refreshMidiDevices()
                 midiHandler?.autoSelectFirstDevice()
             }
         }
@@ -103,21 +98,16 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
 
                 _uiState.value = _uiState.value.copy(
                     song = song,
-                    allNotes = song.tracks.flatMap { it.notes }
+                    allNotes = song.tracks.flatMap { it.notes },
+                    noteStates = emptyMap(),
+                    noteFeedback = emptyMap()
                 )
 
                 // Initialize components for this song
                 transport?.seekToStart()
                 grader = Grader(song)
                 learnGate = LearnGate(song)
-                
-                scheduler?.stop()
-                scheduler = SongScheduler(
-                    synth!!,
-                    song,
-                    transport!!.currentTimeMs,
-                    transport!!.tempoMultiplierState
-                )
+                observeGrader(grader!!)
 
                 _uiState.value = _uiState.value.copy(statusMessage = "MIDI file loaded successfully")
             } catch (e: Exception) {
@@ -144,19 +134,16 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
 
     fun play() {
         transport?.play()
-        scheduler?.start(viewModelScope)
         _uiState.value = _uiState.value.copy(isPlaying = true)
     }
 
     fun pause() {
         transport?.pause()
-        scheduler?.stop()
         _uiState.value = _uiState.value.copy(isPlaying = false)
     }
 
     fun seekToStart() {
         transport?.seekToStart()
-        scheduler?.seekTo(0L, viewModelScope)
         grader?.reset()
         learnGate?.reset()
         _uiState.value = _uiState.value.copy(currentTimeMs = 0L)
@@ -177,7 +164,7 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
         // In learn mode, check if we can resume
         if (_uiState.value.playMode == PlayMode.Learn) {
             val noteStates = grader?.noteStatesFlow?.value ?: emptyMap()
-            learnGate?.onTimeUpdate(currentTime, noteStates)
+            handleLearnGateStatus(learnGate?.onTimeUpdate(currentTime, noteStates))
         }
     }
 
@@ -190,7 +177,7 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
         pitchDetector?.stop()
         pitchDetector = PitchDetector(
             onNoteOn = { pitch -> onNotePlayed(pitch) },
-            onNoteOff = { onNoteReleased(0) }  // Pitch detector doesn't track individual notes
+            onNoteOff = { pitch -> onNoteReleased(pitch) }
         )
         pitchDetector?.start(viewModelScope)
     }
@@ -203,9 +190,58 @@ class PianoLearnerViewModel(application: Application) : AndroidViewModel(applica
     override fun onCleared() {
         super.onCleared()
         transport?.cleanup()
-        synth?.cleanup()
-        scheduler?.stop()
         midiHandler?.cleanup()
         pitchDetector?.stop()
+    }
+
+    fun onMicrophonePermissionDenied() {
+        stopMicrophoneInput()
+        _uiState.value = _uiState.value.copy(
+            inputMode = InputMode.Midi,
+            statusMessage = "Microphone permission denied. MIDI input selected."
+        )
+    }
+
+    private fun observeGrader(grader: Grader) {
+        viewModelScope.launch {
+            grader.noteStatesFlow.collect { states ->
+                _uiState.value = _uiState.value.copy(noteStates = states)
+            }
+        }
+        viewModelScope.launch {
+            grader.feedbackFlow.collect { feedback ->
+                _uiState.value = _uiState.value.copy(noteFeedback = feedback)
+            }
+        }
+    }
+
+    private fun handleLearnGateStatus(status: LearnGateStatus?) {
+        when (status) {
+            LearnGateStatus.PauseRequested -> {
+                if (_uiState.value.isPlaying) {
+                    pause()
+                }
+            }
+            LearnGateStatus.ResumeRequested -> {
+                if (!_uiState.value.isPlaying) {
+                    play()
+                }
+            }
+            LearnGateStatus.Finished -> Unit
+            LearnGateStatus.Waiting -> Unit
+            null -> Unit
+        }
+    }
+
+    private fun refreshMidiDevices() {
+        val devices = midiHandler?.getAvailableDeviceNames().orEmpty()
+        _uiState.value = _uiState.value.copy(
+            midiDevices = devices,
+            statusMessage = if (devices.isEmpty()) {
+                "No MIDI devices connected"
+            } else {
+                "MIDI device ready: ${devices.first()}"
+            }
+        )
     }
 }

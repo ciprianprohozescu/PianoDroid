@@ -13,7 +13,7 @@ import kotlin.math.*
  */
 class PitchDetector(
     private val onNoteOn: (pitch: Int) -> Unit,
-    private val onNoteOff: () -> Unit
+    private val onNoteOff: (pitch: Int) -> Unit
 ) {
     private val sampleRate = 44100
     private val bufferSize = AudioRecord.getMinBufferSize(
@@ -55,7 +55,7 @@ class PitchDetector(
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
-        currentNotes.forEach { onNoteOff() }
+        currentNotes.forEach { onNoteOff(it) }
         currentNotes.clear()
     }
 
@@ -79,7 +79,7 @@ class PitchDetector(
 
                     // Only trigger if note changed
                     if (midiNote !in currentNotes && midiNote > 0) {
-                        currentNotes.forEach { onNoteOff() }
+                        currentNotes.forEach { onNoteOff(it) }
                         currentNotes.clear()
                         currentNotes.add(midiNote)
                         onNoteOn(midiNote)
@@ -87,9 +87,8 @@ class PitchDetector(
                 } else {
                     // No pitch detected
                     if (currentNotes.isNotEmpty()) {
-                        currentNotes.forEach { onNoteOff() }
+                        currentNotes.forEach { onNoteOff(it) }
                         currentNotes.clear()
-                        onNoteOff()
                     }
                 }
 
